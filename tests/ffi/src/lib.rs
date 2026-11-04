@@ -36,3 +36,18 @@ pub extern "C" fn rust_mul_add(lhs: f80, rhs: f80, addend: f80) -> f80 {
     lhs.mul_add(rhs, addend)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_tanh(value: f80) -> f80 {
+    value.tanh()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_gamma(value: f80) -> f80 {
+    value.gamma()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_to_f32(value: f80) -> f32 {
+    value.to_f32()
+}
+

@@ -29,6 +29,9 @@ extern rust_f80 rust_sub(rust_f80, rust_f80);
 extern rust_f80 rust_mul(rust_f80, rust_f80);
 extern rust_f80 rust_div(rust_f80, rust_f80);
 extern rust_f80 rust_mul_add(rust_f80, rust_f80, rust_f80);
+extern rust_f80 rust_tanh(rust_f80);
+extern rust_f80 rust_gamma(rust_f80);
+extern float rust_to_f32(rust_f80);
 
 static rust_f80 from_long_double(long double value) {
     rust_f80 result = {0};
@@ -68,7 +71,15 @@ static void check_equal(const char *operation, long double expected, long double
     if ((expected != actual && !(isnan(expected) && isnan(actual))) ||
         (expected == 0.0L && actual == 0.0L && signbit(expected) != signbit(actual))) {
         fprintf(stderr, "%s mismatch: expected=%La actual=%La\n", operation, expected, actual);
-        exit(1);
+        abort();
+    }
+}
+
+static void check_case_equal(const char *test_case, long double expected, long double actual) {
+    if ((expected != actual && !(isnan(expected) && isnan(actual))) ||
+        (expected == 0.0L && actual == 0.0L && signbit(expected) != signbit(actual))) {
+        fprintf(stderr, "%s: expected=%La actual=%La\n", test_case, expected, actual);
+        abort();
     }
 }
 
@@ -91,6 +102,29 @@ int main(void) {
         check_equal("mul", a * b, to_long_double(rust_mul(ra, rb)));
         if (b != 0.0L)
             check_equal("div", a / b, to_long_double(rust_div(ra, rb)));
+    }
+
+    check_case_equal("tanh(+10000)", tanhl(10000.0L),
+                     to_long_double(rust_tanh(from_long_double(10000.0L))));
+    check_case_equal("tanh(-10000)", tanhl(-10000.0L),
+                     to_long_double(rust_tanh(from_long_double(-10000.0L))));
+    check_case_equal("tanh(+infinity)", tanhl(INFINITY),
+                     to_long_double(rust_tanh(from_long_double(INFINITY))));
+    check_case_equal("tanh(-infinity)", tanhl(-INFINITY),
+                     to_long_double(rust_tanh(from_long_double(-INFINITY))));
+
+    check_case_equal("gamma(-infinity)", tgammal(-INFINITY),
+                     to_long_double(rust_gamma(from_long_double(-INFINITY))));
+
+    volatile long double midpoint = 1.0L + ldexpl(1.0L, -24);
+    volatile long double above_midpoint = midpoint + ldexpl(1.0L, -63);
+    long double conversion_input = above_midpoint;
+    float expected_f32 = (float)conversion_input;
+    float actual_f32 = rust_to_f32(from_long_double(conversion_input));
+    if (memcmp(&expected_f32, &actual_f32, sizeof(expected_f32)) != 0) {
+        fprintf(stderr, "f80_to_f32(1 + 2^-24 + 2^-63): expected=%a actual=%a input=%La\n",
+                expected_f32, actual_f32, conversion_input);
+        abort();
     }
 
     const int rounding_modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};

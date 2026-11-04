@@ -881,6 +881,9 @@ impl f80 {
     }
 
     pub fn gamma(self) -> Self {
+        if self == Self::NEG_INFINITY {
+            return Self::NAN;
+        }
         let (log_abs, sign) = self.ln_gamma();
         if sign == 0 {
             return Self::INFINITY;
@@ -982,8 +985,9 @@ impl f80 {
         (self.exp() - (-self).exp()) / Self::from(2.0_f64)
     }
     pub fn tanh(self) -> Self {
-        (Self::from(2.0_f64) * self).exp_m1()
-            / ((Self::from(2.0_f64) * self).exp() + Self::from(1.0_f64))
+        let exponential = (Self::from(-2.0_f64) * self.abs()).exp();
+        ((Self::from(1.0_f64) - exponential) / (Self::from(1.0_f64) + exponential))
+            .copysign(self)
     }
 
     pub fn floor(self) -> Self {
@@ -1592,7 +1596,18 @@ impl f80 {
 
     #[inline]
     pub fn to_f32(self) -> f32 {
-        self.to_f64() as f32
+        let mut result = 0.0_f32;
+        unsafe {
+            asm!(
+                "fld tbyte ptr [{src}]",
+                "fstp dword ptr [{dst}]",
+                src = in(reg) self.bytes.as_ptr(),
+                dst = in(reg) &mut result,
+                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            );
+        }
+        result
     }
 
     #[inline]
