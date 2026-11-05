@@ -195,6 +195,21 @@ fn x87_rounding_mode() -> u16 {
 }
 
 /// An x87 80-bit extended-precision floating-point value.
+///
+/// `f80` stores the 64-bit significand and 15-bit exponent used by the x87
+/// extended format. Arithmetic is performed by x87 instructions and follows
+/// the active x87 rounding mode. The value is not an IEEE 754 interchange
+/// format, and its 10-byte encoding may have alignment padding in memory.
+/// Conversions to `f32` and `f64` round to the destination format.
+///
+/// # Examples
+///
+/// ```
+/// use x87::f80;
+///
+/// let value = f80::from(1.25_f64) + f80::from(2.5_f64);
+/// assert_eq!(value.to_f64(), 3.75);
+/// ```
 #[cfg_attr(target_arch = "x86_64", repr(C, align(16)))]
 #[cfg_attr(target_arch = "x86", repr(C, align(4)))]
 #[derive(Clone, Copy)]
@@ -202,82 +217,175 @@ pub struct f80 {
     bytes: [u8; 10],
 }
 
+/// Integer types supported by [`f80::to_int_unchecked`].
+///
+/// This trait is public so the generic conversion method can name its output
+/// type. Its implementations truncate finite values and saturate out-of-range
+/// values; NaN converts to zero.
 pub trait F80Integer: Sized {
+    /// Converts an `f80` value to this integer type by truncating toward zero.
     fn from_f80_truncating(value: f80) -> Self;
 }
 
-macro_rules! impl_f80_integer_signed {
-    ($($ty:ty),* $(,)?) => {$ (
-        impl F80Integer for $ty {
-            fn from_f80_truncating(value: f80) -> Self {
-                value.to_signed(<$ty>::MIN as i128, <$ty>::MAX as i128) as $ty
-            }
-        }
-    )*};
+impl F80Integer for i8 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_signed(i8::MIN as i128, i8::MAX as i128) as i8
+    }
 }
-
-macro_rules! impl_f80_integer_unsigned {
-    ($($ty:ty),* $(,)?) => {$ (
-        impl F80Integer for $ty {
-            fn from_f80_truncating(value: f80) -> Self {
-                value.to_unsigned(<$ty>::MAX as u128) as $ty
-            }
-        }
-    )*};
+impl F80Integer for i16 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_signed(i16::MIN as i128, i16::MAX as i128) as i16
+    }
 }
-
-impl_f80_integer_signed!(i8, i16, i32, i64, i128, isize);
-impl_f80_integer_unsigned!(u8, u16, u32, u64, u128, usize);
+impl F80Integer for i32 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_signed(i32::MIN as i128, i32::MAX as i128) as i32
+    }
+}
+impl F80Integer for i64 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_signed(i64::MIN as i128, i64::MAX as i128) as i64
+    }
+}
+impl F80Integer for i128 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_signed(i128::MIN, i128::MAX)
+    }
+}
+impl F80Integer for isize {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_signed(isize::MIN as i128, isize::MAX as i128) as isize
+    }
+}
+impl F80Integer for u8 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_unsigned(u8::MAX as u128) as u8
+    }
+}
+impl F80Integer for u16 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_unsigned(u16::MAX as u128) as u16
+    }
+}
+impl F80Integer for u32 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_unsigned(u32::MAX as u128) as u32
+    }
+}
+impl F80Integer for u64 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_unsigned(u64::MAX as u128) as u64
+    }
+}
+impl F80Integer for u128 {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_unsigned(u128::MAX)
+    }
+}
+impl F80Integer for usize {
+    fn from_f80_truncating(value: f80) -> Self {
+        value.to_unsigned(usize::MAX as u128) as usize
+    }
+}
 
 impl f80 {
+    /// The number of bits in the x87 encoding.
     pub const BITS: u32 = 80;
+    /// Positive zero.
     pub const ZERO: Self = Self::from_parts(false, 0, 0);
+    /// Negative zero.
     pub const NEG_ZERO: Self = Self::from_parts(true, 0, 0);
+    /// Positive infinity.
     pub const INFINITY: Self = Self::from_parts(false, 0x7fff, 0x8000_0000_0000_0000);
+    /// Negative infinity.
     pub const NEG_INFINITY: Self = Self::from_parts(true, 0x7fff, 0x8000_0000_0000_0000);
+    /// A quiet NaN.
     pub const NAN: Self = Self::from_parts(false, 0x7fff, 0xc000_0000_0000_0000);
+    /// The smallest positive normal value.
     pub const MIN_POSITIVE: Self = Self::from_parts(false, 1, 0x8000_0000_0000_0000);
+    /// The largest finite positive value.
     pub const MAX: Self = Self::from_parts(false, 0x7ffe, u64::MAX);
+    /// The most negative finite value.
     pub const MIN: Self = Self::from_parts(true, 0x7ffe, u64::MAX);
+    /// The difference between 1.0 and the next larger representable value.
     pub const EPSILON: Self = Self::from_parts(false, 0x3fc0, 0x8000_0000_0000_0000);
+    /// A bit mask selecting the exponent field.
     pub const EXPONENT_MASK: u128 = 0x7fff_0000_0000_0000_0000;
+    /// A bit mask selecting the significand field.
     pub const MANTISSA_MASK: u128 = 0x0000_ffff_ffff_ffff_ffff;
+    /// A bit mask selecting the sign bit.
     pub const SIGN_MASK: u128 = 0x8000_0000_0000_0000_0000;
+    /// The largest positive integer exactly representable.
     pub const MAX_EXACT_INTEGER: Self = Self::from_parts(false, 0x403f, 0x8000_0000_0000_0000);
+    /// The smallest negative integer exactly representable.
     pub const MIN_EXACT_INTEGER: Self = Self::from_parts(true, 0x403f, 0x8000_0000_0000_0000);
+    /// The mathematical constant e.
     pub const E: Self = Self::from_parts(false, 0x4000, 0xadf85458a2bb4a9b);
+    /// The Euler–Mascheroni constant.
     pub const EULER_GAMMA: Self = Self::from_parts(false, 0x3ffe, 0x93c467e37db0c7a5);
+    /// The reciprocal of pi.
     pub const FRAC_1_PI: Self = Self::from_parts(false, 0x3ffd, 0xa2f9836e4e44152a);
+    /// The reciprocal of the square root of 2.
     pub const FRAC_1_SQRT_2: Self = Self::from_parts(false, 0x3ffe, 0xb504f333f9de6484);
+    /// Two divided by pi.
     pub const FRAC_2_PI: Self = Self::from_parts(false, 0x3ffe, 0xa2f9836e4e44152a);
+    /// Two divided by the square root of pi.
     pub const FRAC_2_SQRT_PI: Self = Self::from_parts(false, 0x3fff, 0x906eba8214db688d);
+    /// Pi divided by 2.
     pub const FRAC_PI_2: Self = Self::from_parts(false, 0x3fff, 0xc90fdaa22168c235);
+    /// Pi divided by 3.
     pub const FRAC_PI_3: Self = Self::from_parts(false, 0x3fff, 0x860a91c16b9b2c23);
+    /// Pi divided by 4.
     pub const FRAC_PI_4: Self = Self::from_parts(false, 0x3ffe, 0xc90fdaa22168c235);
+    /// Pi divided by 6.
     pub const FRAC_PI_6: Self = Self::from_parts(false, 0x3ffe, 0x860a91c16b9b2c23);
+    /// Pi divided by 8.
     pub const FRAC_PI_8: Self = Self::from_parts(false, 0x3ffd, 0xc90fdaa22168c235);
+    /// The golden ratio constant.
     pub const GOLDEN_RATIO: Self = Self::from_parts(false, 0x3fff, 0xcf1bbcdcbfa53e0b);
+    /// The natural logarithm of 2.
     pub const LN_2: Self = Self::from_parts(false, 0x3ffe, 0xb17217f7d1cf79ac);
+    /// The natural logarithm of 10.
     pub const LN_10: Self = Self::from_parts(false, 0x4000, 0x935d8dddaaa8ac17);
+    /// The base-2 logarithm of 10.
     pub const LOG2_10: Self = Self::from_parts(false, 0x4000, 0xd49a784bcd1b8afe);
+    /// The base-2 logarithm of e.
     pub const LOG2_E: Self = Self::from_parts(false, 0x3fff, 0xb8aa3b295c17f0bc);
+    /// The base-10 logarithm of 2.
     pub const LOG10_2: Self = Self::from_parts(false, 0x3ffd, 0x9a209a84fbcff799);
+    /// The base-10 logarithm of e.
     pub const LOG10_E: Self = Self::from_parts(false, 0x3ffd, 0xde5bd8a937287195);
+    /// The mathematical constant pi.
     pub const PI: Self = Self::from_parts(false, 0x4000, 0xc90fdaa22168c235);
+    /// The square root of 2.
     pub const SQRT_2: Self = Self::from_parts(false, 0x3fff, 0xb504f333f9de6484);
+    /// Two times pi.
     pub const TAU: Self = Self::from_parts(false, 0x4001, 0xc90fdaa22168c235);
+    /// The reciprocal of the square root of 3.
     pub const FRAC_1_SQRT_3: Self = Self::from_parts(false, 0x3ffe, 0x93cd3a2c8198e269);
+    /// The reciprocal of the square root of 5.
     pub const FRAC_1_SQRT_5: Self = Self::from_parts(false, 0x3ffd, 0xe4f92e2dff6ec9ab);
+    /// The reciprocal of the square root of 2 pi.
     pub const FRAC_1_SQRT_2PI: Self = Self::from_parts(false, 0x3ffd, 0xcc42299ea1b28468);
+    /// The reciprocal of the square root of pi.
     pub const FRAC_1_SQRT_PI: Self = Self::from_parts(false, 0x3ffe, 0x906eba8214db688d);
+    /// The square root of 3.
     pub const SQRT_3: Self = Self::from_parts(false, 0x3fff, 0xddb3d742c265539e);
+    /// The square root of 5.
     pub const SQRT_5: Self = Self::from_parts(false, 0x4000, 0x8f1bbcdcbfa53e0b);
+    /// The radix used by the significand.
     pub const RADIX: u32 = 2;
+    /// The number of base-2 digits in the significand.
     pub const MANTISSA_DIGITS: u32 = 64;
+    /// The approximate number of significant decimal digits.
     pub const DIGITS: u32 = 18;
+    /// The minimum possible unbiased exponent, plus one.
     pub const MIN_EXP: i32 = -16381;
+    /// The maximum possible unbiased exponent, plus one.
     pub const MAX_EXP: i32 = 16384;
+    /// The minimum possible base-10 exponent.
     pub const MIN_10_EXP: i32 = -4931;
+    /// The maximum possible base-10 exponent.
     pub const MAX_10_EXP: i32 = 4932;
 
     const fn from_parts(negative: bool, exponent: u16, significand: u64) -> Self {
@@ -290,37 +398,46 @@ impl f80 {
         }
     }
 
+    /// Returns `true` if this value is NaN.
     pub const fn is_nan(self) -> bool {
         let (_, exponent, significand) = self.integer_parts();
         exponent == 0x7fff && significand != 0x8000_0000_0000_0000
     }
 
+    /// Returns `true` if this value is positive or negative infinity.
     pub const fn is_infinite(self) -> bool {
         let (_, exponent, significand) = self.integer_parts();
         exponent == 0x7fff && significand == 0x8000_0000_0000_0000
     }
 
+    /// Returns `true` if this value is neither infinite nor NaN.
     pub const fn is_finite(self) -> bool {
         self.integer_parts().1 != 0x7fff
     }
+    /// Returns `true` for either signed zero.
     pub const fn is_zero(self) -> bool {
         self.integer_parts().1 == 0 && self.integer_parts().2 == 0
     }
+    /// Returns `true` if this value is subnormal.
     pub const fn is_subnormal(self) -> bool {
         let (_, exponent, significand) = self.integer_parts();
         exponent == 0 && significand != 0 && significand & 0x8000_0000_0000_0000 == 0
     }
+    /// Returns `true` if this value is normal.
     pub const fn is_normal(self) -> bool {
         let (_, e, s) = self.integer_parts();
         (e != 0 && e != 0x7fff) || (e == 0 && s & 0x8000_0000_0000_0000 != 0)
     }
+    /// Returns `true` if the sign bit is set, including for negative zero and NaN.
     pub const fn is_sign_negative(self) -> bool {
         self.integer_parts().0
     }
+    /// Returns `true` if the sign bit is clear.
     pub const fn is_sign_positive(self) -> bool {
         !self.is_sign_negative()
     }
 
+    /// Returns the category of this value.
     pub const fn classify(self) -> FpCategory {
         let (_, exponent, significand) = self.integer_parts();
         match exponent {
@@ -333,6 +450,7 @@ impl f80 {
         }
     }
 
+    /// Returns the raw 80-bit encoding in the low bits of a `u128`.
     pub const fn to_bits(self) -> u128 {
         let mut bits = 0u128;
         let mut i = 0;
@@ -343,6 +461,7 @@ impl f80 {
         bits
     }
 
+    /// Constructs a value from its raw 80-bit encoding. Panics if any bits above bit 79 are set.
     pub const fn from_bits(bits: u128) -> Self {
         assert!(bits >> 80 == 0);
         let mut bytes = [0; 10];
@@ -354,10 +473,12 @@ impl f80 {
         Self { bytes }
     }
 
+    /// Returns the 10-byte little-endian encoding.
     pub const fn to_le_bytes(self) -> [u8; 10] {
         self.bytes
     }
 
+    /// Returns the 10-byte big-endian encoding.
     pub const fn to_be_bytes(self) -> [u8; 10] {
         let mut bytes = self.bytes;
         let mut i = 0;
@@ -370,15 +491,18 @@ impl f80 {
     }
 
     #[cfg(target_endian = "little")]
+    /// Returns the encoding in the target’s native byte order.
     pub const fn to_ne_bytes(self) -> [u8; 10] {
         self.to_le_bytes()
     }
 
     #[cfg(target_endian = "big")]
+    /// Returns the encoding in the target’s native byte order.
     pub const fn to_ne_bytes(self) -> [u8; 10] {
         self.to_be_bytes()
     }
 
+    /// Compares values using a total ordering of their bit patterns.
     pub fn total_cmp(&self, other: &Self) -> Ordering {
         const SIGN: u128 = 1 << 79;
         const MASK: u128 = (1 << 80) - 1;
@@ -397,6 +521,7 @@ impl f80 {
         left.cmp(&right)
     }
 
+    /// Returns the next representable value greater than `self`.
     pub fn next_up(self) -> Self {
         if self.is_nan() || self == Self::INFINITY {
             return self;
@@ -412,6 +537,7 @@ impl f80 {
         })
     }
 
+    /// Returns the next representable value less than `self`.
     pub fn next_down(self) -> Self {
         if self.is_nan() || self == Self::NEG_INFINITY {
             return self;
@@ -428,6 +554,7 @@ impl f80 {
     }
 
     #[inline]
+    /// Returns the absolute value.
     pub const fn abs(self) -> Self {
         let mut result = self;
         result.bytes[9] &= 0x7f;
@@ -435,6 +562,7 @@ impl f80 {
     }
 
     #[inline]
+    /// Returns a value with the magnitude of `self` and sign of `sign`.
     pub const fn copysign(self, sign: Self) -> Self {
         let mut result = self;
         result.bytes[9] = (result.bytes[9] & 0x7f) | (sign.bytes[9] & 0x80);
@@ -442,6 +570,7 @@ impl f80 {
     }
 
     #[inline]
+    /// Returns the square root using the x87 instruction set.
     pub fn sqrt(self) -> Self {
         let mut result = Self { bytes: [0; 10] };
         unsafe {
@@ -458,6 +587,7 @@ impl f80 {
         result
     }
 
+    /// Returns the sine using the x87 instruction set.
     pub fn sin(self) -> Self {
         let nan = f64::NAN;
         let mut result = Self::ZERO;
@@ -485,6 +615,7 @@ impl f80 {
         result
     }
 
+    /// Returns the cosine using the x87 instruction set.
     pub fn cos(self) -> Self {
         let nan = f64::NAN;
         let mut result = Self::ZERO;
@@ -512,10 +643,12 @@ impl f80 {
         result
     }
 
+    /// Returns the sine and cosine.
     pub fn sin_cos(self) -> (Self, Self) {
         (self.sin(), self.cos())
     }
 
+    /// Returns the tangent using the x87 instruction set.
     pub fn tan(self) -> Self {
         let nan = f64::NAN;
         let mut result = Self::ZERO;
@@ -544,6 +677,7 @@ impl f80 {
         result
     }
 
+    /// Returns the arctangent using the x87 instruction set.
     pub fn atan(self) -> Self {
         let mut result = Self::ZERO;
         unsafe {
@@ -561,6 +695,7 @@ impl f80 {
         result
     }
 
+    /// Returns the four-quadrant arctangent of `self` and `x`.
     pub fn atan2(self, x: Self) -> Self {
         let mut result = Self::ZERO;
         unsafe {
@@ -579,6 +714,7 @@ impl f80 {
         result
     }
 
+    /// Returns the natural logarithm.
     pub fn ln(self) -> Self {
         let mut result = Self::ZERO;
         unsafe {
@@ -596,6 +732,7 @@ impl f80 {
         result
     }
 
+    /// Returns the natural logarithm of `1 + self`.
     pub fn ln_1p(self) -> Self {
         if self.abs() >= Self::from(0.25_f64) {
             return (Self::from(1.0_f64) + self).ln();
@@ -616,6 +753,7 @@ impl f80 {
         result
     }
 
+    /// Returns the base-2 logarithm.
     pub fn log2(self) -> Self {
         let mut result = Self::ZERO;
         unsafe {
@@ -633,6 +771,7 @@ impl f80 {
         result
     }
 
+    /// Returns the base-10 logarithm.
     pub fn log10(self) -> Self {
         let mut result = Self::ZERO;
         unsafe {
@@ -650,10 +789,12 @@ impl f80 {
         result
     }
 
+    /// Returns the logarithm of `self` in the given `base`.
     pub fn log(self, base: Self) -> Self {
         self.log2() / base.log2()
     }
 
+    /// Returns 2 raised to the power `self`.
     pub fn exp2(self) -> Self {
         if self.is_infinite() {
             return if self.is_sign_negative() {
@@ -685,9 +826,11 @@ impl f80 {
         result
     }
 
+    /// Returns e raised to the power `self`.
     pub fn exp(self) -> Self {
         (self * Self::LOG2_E).exp2()
     }
+    /// Returns e raised to the power `self`, minus 1.
     pub fn exp_m1(self) -> Self {
         if self.abs() >= Self::LN_2 {
             return self.exp() - Self::from(1.0_f64);
@@ -708,6 +851,7 @@ impl f80 {
         result
     }
 
+    /// Raises `self` to a floating-point exponent.
     pub fn powf(self, exponent: Self) -> Self {
         if exponent.is_zero() || self == Self::from(1.0_f64) {
             return Self::from(1.0_f64);
@@ -723,6 +867,7 @@ impl f80 {
         (self.log2() * exponent).exp2()
     }
 
+    /// Computes `(self * multiplier) + addend` with one final rounding.
     pub fn mul_add(self, multiplier: Self, addend: Self) -> Self {
         let (negative_a, exponent_a, significand_a) = self.integer_parts();
         let (negative_b, exponent_b, significand_b) = multiplier.integer_parts();
@@ -825,10 +970,12 @@ impl f80 {
         fma_round_exact(&magnitude, base_exponent, negative, mode)
     }
 
+    /// Converts to an integer by truncating toward zero and saturating out-of-range values.
     pub fn to_int_unchecked<T: F80Integer>(self) -> T {
         T::from_f80_truncating(self)
     }
 
+    /// Returns the natural logarithm of the absolute gamma function and its sign.
     pub fn ln_gamma(self) -> (Self, i32) {
         if self.is_nan() {
             return (Self::NAN, 0);
@@ -880,6 +1027,7 @@ impl f80 {
         )
     }
 
+    /// Returns the gamma function.
     pub fn gamma(self) -> Self {
         if self == Self::NEG_INFINITY {
             return Self::NAN;
@@ -891,6 +1039,7 @@ impl f80 {
         log_abs.exp().copysign(Self::from(sign))
     }
 
+    /// Returns the error function.
     pub fn erf(self) -> Self {
         if self.is_nan() {
             return self;
@@ -919,6 +1068,7 @@ impl f80 {
         (Self::FRAC_2_SQRT_PI * sum).copysign(self)
     }
 
+    /// Returns the complementary error function.
     pub fn erfc(self) -> Self {
         if self.is_nan() {
             return self;
@@ -955,51 +1105,63 @@ impl f80 {
         }
     }
 
+    /// Returns the inverse sine.
     pub fn asin(self) -> Self {
         (self / (Self::from(1.0_f64) - self * self).sqrt()).atan()
     }
+    /// Returns the inverse cosine.
     pub fn acos(self) -> Self {
         Self::FRAC_PI_2 - self.asin()
     }
+    /// Returns the inverse hyperbolic cosine.
     pub fn acosh(self) -> Self {
         (self + (self - Self::from(1.0_f64)).sqrt() * (self + Self::from(1.0_f64)).sqrt()).ln()
     }
+    /// Returns the inverse hyperbolic sine.
     pub fn asinh(self) -> Self {
         self.abs().asinh_positive().copysign(self)
     }
     fn asinh_positive(self) -> Self {
         (self + self.hypot(Self::from(1.0_f64))).ln()
     }
+    /// Returns the inverse hyperbolic tangent.
     pub fn atanh(self) -> Self {
         ((Self::from(1.0_f64) + self) / (Self::from(1.0_f64) - self)).ln() / Self::from(2.0_f64)
     }
+    /// Returns the cube root.
     pub fn cbrt(self) -> Self {
         self.abs()
             .powf(Self::from(1.0_f64) / Self::from(3.0_f64))
             .copysign(self)
     }
+    /// Returns the hyperbolic cosine.
     pub fn cosh(self) -> Self {
         (self.exp() + (-self).exp()) / Self::from(2.0_f64)
     }
+    /// Returns the hyperbolic sine.
     pub fn sinh(self) -> Self {
         (self.exp() - (-self).exp()) / Self::from(2.0_f64)
     }
+    /// Returns the hyperbolic tangent.
     pub fn tanh(self) -> Self {
         let exponential = (Self::from(-2.0_f64) * self.abs()).exp();
-        ((Self::from(1.0_f64) - exponential) / (Self::from(1.0_f64) + exponential))
-            .copysign(self)
+        ((Self::from(1.0_f64) - exponential) / (Self::from(1.0_f64) + exponential)).copysign(self)
     }
 
+    /// Returns the greatest integer less than or equal to `self`.
     pub fn floor(self) -> Self {
         self.round_integral(1)
     }
+    /// Returns the least integer greater than or equal to `self`.
     pub fn ceil(self) -> Self {
         self.round_integral(2)
     }
+    /// Returns the integer part of `self`, rounding toward zero.
     pub fn trunc(self) -> Self {
         self.round_integral(3)
     }
 
+    /// Rounds to the nearest integer, with halfway cases away from zero.
     pub fn round(self) -> Self {
         if !self.is_finite() || self.is_zero() {
             return self;
@@ -1012,14 +1174,17 @@ impl f80 {
         }
     }
 
+    /// Returns the fractional part of `self`.
     pub fn fract(self) -> Self {
         self - self.trunc()
     }
 
+    /// Rounds to the nearest integer, with halfway cases to the even integer.
     pub fn round_ties_even(self) -> Self {
         self.round_integral(0)
     }
 
+    /// Returns `self - other` when `self > other`, and zero otherwise.
     pub fn abs_sub(self, other: Self) -> Self {
         if self.is_nan() || other.is_nan() {
             self + other
@@ -1030,22 +1195,28 @@ impl f80 {
         }
     }
 
+    /// Adds using x87 algebraic evaluation.
     pub fn algebraic_add(self, other: Self) -> Self {
         self + other
     }
+    /// Subtracts using x87 algebraic evaluation.
     pub fn algebraic_sub(self, other: Self) -> Self {
         self - other
     }
+    /// Multiplies using x87 algebraic evaluation.
     pub fn algebraic_mul(self, other: Self) -> Self {
         self * other
     }
+    /// Divides using x87 algebraic evaluation.
     pub fn algebraic_div(self, other: Self) -> Self {
         self / other
     }
+    /// Returns the x87 remainder.
     pub fn algebraic_rem(self, other: Self) -> Self {
         self % other
     }
 
+    /// Returns a number with the sign of `self`.
     pub fn signum(self) -> Self {
         if self.is_nan() {
             self
@@ -1056,13 +1227,16 @@ impl f80 {
         }
     }
 
+    /// Converts radians to degrees.
     pub fn to_degrees(self) -> Self {
         self * (Self::from(180.0_f64) / Self::PI)
     }
+    /// Converts degrees to radians.
     pub fn to_radians(self) -> Self {
         self * (Self::PI / Self::from(180.0_f64))
     }
 
+    /// Calculates the Euclidean quotient.
     pub fn div_euclid(self, rhs: Self) -> Self {
         let q = (self / rhs).trunc();
         let r = self - q * rhs;
@@ -1077,11 +1251,13 @@ impl f80 {
         }
     }
 
+    /// Calculates the Euclidean remainder.
     pub fn rem_euclid(self, rhs: Self) -> Self {
         let r = self % rhs;
         if r < Self::ZERO { r + rhs.abs() } else { r }
     }
 
+    /// Clamps the magnitude to the inclusive range [`min`, `max`].
     pub fn clamp_magnitude(self, min: Self, max: Self) -> Self {
         assert!(min >= Self::ZERO && min <= max);
         let magnitude = self.abs();
@@ -1094,6 +1270,7 @@ impl f80 {
         }
     }
 
+    /// Returns the midpoint between `self` and `other`.
     pub fn midpoint(self, other: Self) -> Self {
         if self == other {
             return self;
@@ -1109,6 +1286,7 @@ impl f80 {
         }
     }
 
+    /// Returns the square root of the sum of the squares of `self` and `other`.
     pub fn hypot(self, other: Self) -> Self {
         let a = self.abs();
         let b = other.abs();
@@ -1126,6 +1304,7 @@ impl f80 {
         }
     }
 
+    /// Returns the lesser value, propagating NaN according to IEEE 754 minimum semantics.
     pub fn minimum(self, other: Self) -> Self {
         if self.is_nan() || other.is_nan() {
             Self::NAN
@@ -1134,6 +1313,7 @@ impl f80 {
         }
     }
 
+    /// Returns the greater value, propagating NaN according to IEEE 754 maximum semantics.
     pub fn maximum(self, other: Self) -> Self {
         if self.is_nan() || other.is_nan() {
             Self::NAN
@@ -1142,6 +1322,7 @@ impl f80 {
         }
     }
 
+    /// Returns the lesser value, ignoring a single NaN operand.
     pub fn min(self, other: Self) -> Self {
         match (self.is_nan(), other.is_nan()) {
             (true, true) => self,
@@ -1164,6 +1345,7 @@ impl f80 {
         }
     }
 
+    /// Returns the greater value, ignoring a single NaN operand.
     pub fn max(self, other: Self) -> Self {
         match (self.is_nan(), other.is_nan()) {
             (true, true) => self,
@@ -1186,6 +1368,7 @@ impl f80 {
         }
     }
 
+    /// Restricts the value to the inclusive range [`min`, `max`].
     pub fn clamp(self, min: Self, max: Self) -> Self {
         assert!(min <= max);
         self.max(min).min(max)
@@ -1218,10 +1401,12 @@ impl f80 {
     }
 
     #[inline]
+    /// Returns the reciprocal of `self`.
     pub fn recip(self) -> Self {
         Self::from(1.0_f64) / self
     }
 
+    /// Raises `self` to an integer power.
     pub fn powi(self, n: i32) -> Self {
         if n == 0 {
             return Self::from(1.0_f64);
@@ -1322,47 +1507,106 @@ impl PartialOrd for f80 {
     }
 }
 
-macro_rules! impl_binary_op {
-    ($trait:ident, $method:ident, $instruction:literal) => {
-        impl $trait for f80 {
-            type Output = Self;
+impl Add for f80 {
+    type Output = Self;
 
-            #[inline]
-            fn $method(self, rhs: Self) -> Self {
-                let mut result = Self { bytes: [0; 10] };
+    #[inline]
+    fn add(self, rhs: Self) -> Self {
+        let mut result = Self { bytes: [0; 10] };
 
-                unsafe {
-                    asm!(
-                        "fld tbyte ptr [{a}]",
-                        "fld tbyte ptr [{b}]",
-                        $instruction,
-                        "fstp tbyte ptr [{out}]",
-
-                        a = in(reg) self.bytes.as_ptr(),
-                        b = in(reg) rhs.bytes.as_ptr(),
-                        out = in(reg) result.bytes.as_mut_ptr(),
-
-                        out("st(0)") _,
-                        out("st(1)") _,
-                        out("st(2)") _,
-                        out("st(3)") _,
-                        out("st(4)") _,
-                        out("st(5)") _,
-                        out("st(6)") _,
-                        out("st(7)") _,
-                    );
-                }
-
-                result
-            }
+        unsafe {
+            asm!(
+                "fld tbyte ptr [{a}]",
+                "fld tbyte ptr [{b}]",
+                "faddp st(1), st(0)",
+                "fstp tbyte ptr [{out}]",
+                a = in(reg) self.bytes.as_ptr(),
+                b = in(reg) rhs.bytes.as_ptr(),
+                out = in(reg) result.bytes.as_mut_ptr(),
+                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            );
         }
-    };
+
+        result
+    }
 }
 
-impl_binary_op!(Add, add, "faddp st(1), st(0)");
-impl_binary_op!(Sub, sub, "fsubp st(1), st(0)");
-impl_binary_op!(Mul, mul, "fmulp st(1), st(0)");
-impl_binary_op!(Div, div, "fdivp st(1), st(0)");
+impl Sub for f80 {
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: Self) -> Self {
+        let mut result = Self { bytes: [0; 10] };
+
+        unsafe {
+            asm!(
+                "fld tbyte ptr [{a}]",
+                "fld tbyte ptr [{b}]",
+                "fsubp st(1), st(0)",
+                "fstp tbyte ptr [{out}]",
+                a = in(reg) self.bytes.as_ptr(),
+                b = in(reg) rhs.bytes.as_ptr(),
+                out = in(reg) result.bytes.as_mut_ptr(),
+                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            );
+        }
+
+        result
+    }
+}
+
+impl Mul for f80 {
+    type Output = Self;
+
+    #[inline]
+    fn mul(self, rhs: Self) -> Self {
+        let mut result = Self { bytes: [0; 10] };
+
+        unsafe {
+            asm!(
+                "fld tbyte ptr [{a}]",
+                "fld tbyte ptr [{b}]",
+                "fmulp st(1), st(0)",
+                "fstp tbyte ptr [{out}]",
+                a = in(reg) self.bytes.as_ptr(),
+                b = in(reg) rhs.bytes.as_ptr(),
+                out = in(reg) result.bytes.as_mut_ptr(),
+                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            );
+        }
+
+        result
+    }
+}
+
+impl Div for f80 {
+    type Output = Self;
+
+    #[inline]
+    fn div(self, rhs: Self) -> Self {
+        let mut result = Self { bytes: [0; 10] };
+
+        unsafe {
+            asm!(
+                "fld tbyte ptr [{a}]",
+                "fld tbyte ptr [{b}]",
+                "fdivp st(1), st(0)",
+                "fstp tbyte ptr [{out}]",
+                a = in(reg) self.bytes.as_ptr(),
+                b = in(reg) rhs.bytes.as_ptr(),
+                out = in(reg) result.bytes.as_mut_ptr(),
+                out("st(0)") _, out("st(1)") _, out("st(2)") _, out("st(3)") _,
+                out("st(4)") _, out("st(5)") _, out("st(6)") _, out("st(7)") _,
+            );
+        }
+
+        result
+    }
+}
+
 impl Rem for f80 {
     type Output = Self;
 
@@ -1392,22 +1636,40 @@ impl Rem for f80 {
     }
 }
 
-macro_rules! impl_assign_op {
-    ($trait:ident, $method:ident, $op:tt) => {
-        impl $trait for f80 {
-            #[inline]
-            fn $method(&mut self, rhs: Self) {
-                *self = *self $op rhs;
-            }
-        }
-    };
+impl AddAssign for f80 {
+    #[inline]
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
 }
 
-impl_assign_op!(AddAssign, add_assign, +);
-impl_assign_op!(SubAssign, sub_assign, -);
-impl_assign_op!(MulAssign, mul_assign, *);
-impl_assign_op!(DivAssign, div_assign, /);
-impl_assign_op!(RemAssign, rem_assign, %);
+impl SubAssign for f80 {
+    #[inline]
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl MulAssign for f80 {
+    #[inline]
+    fn mul_assign(&mut self, rhs: Self) {
+        *self = *self * rhs;
+    }
+}
+
+impl DivAssign for f80 {
+    #[inline]
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
+    }
+}
+
+impl RemAssign for f80 {
+    #[inline]
+    fn rem_assign(&mut self, rhs: Self) {
+        *self = *self % rhs;
+    }
+}
 
 impl Neg for f80 {
     type Output = Self;
@@ -1595,6 +1857,7 @@ impl f80 {
     }
 
     #[inline]
+    /// Converts to an IEEE 754 `f32`, rounding as needed.
     pub fn to_f32(self) -> f32 {
         let mut result = 0.0_f32;
         unsafe {
@@ -1611,76 +1874,151 @@ impl f80 {
     }
 
     #[inline]
+    /// Converts to `i8` by truncating toward zero and saturating out-of-range values.
     pub fn to_i8(self) -> i8 {
         self.to_signed(i8::MIN as i128, i8::MAX as i128) as i8
     }
     #[inline]
+    /// Converts to `i16` by truncating toward zero and saturating out-of-range values.
     pub fn to_i16(self) -> i16 {
         self.to_signed(i16::MIN as i128, i16::MAX as i128) as i16
     }
     #[inline]
+    /// Converts to `i32` by truncating toward zero and saturating out-of-range values.
     pub fn to_i32(self) -> i32 {
         self.to_signed(i32::MIN as i128, i32::MAX as i128) as i32
     }
     #[inline]
+    /// Converts to `i64` by truncating toward zero and saturating out-of-range values.
     pub fn to_i64(self) -> i64 {
         self.to_signed(i64::MIN as i128, i64::MAX as i128) as i64
     }
     #[inline]
+    /// Converts to `i128` by truncating toward zero and saturating out-of-range values.
     pub fn to_i128(self) -> i128 {
         self.to_signed(i128::MIN, i128::MAX)
     }
     #[inline]
+    /// Converts to `isize` by truncating toward zero and saturating out-of-range values.
     pub fn to_isize(self) -> isize {
         self.to_signed(isize::MIN as i128, isize::MAX as i128) as isize
     }
 
     #[inline]
+    /// Converts to `u8` by truncating toward zero and saturating out-of-range values.
     pub fn to_u8(self) -> u8 {
         self.to_unsigned(u8::MAX as u128) as u8
     }
     #[inline]
+    /// Converts to `u16` by truncating toward zero and saturating out-of-range values.
     pub fn to_u16(self) -> u16 {
         self.to_unsigned(u16::MAX as u128) as u16
     }
     #[inline]
+    /// Converts to `u32` by truncating toward zero and saturating out-of-range values.
     pub fn to_u32(self) -> u32 {
         self.to_unsigned(u32::MAX as u128) as u32
     }
     #[inline]
+    /// Converts to `u64` by truncating toward zero and saturating out-of-range values.
     pub fn to_u64(self) -> u64 {
         self.to_unsigned(u64::MAX as u128) as u64
     }
     #[inline]
+    /// Converts to `u128` by truncating toward zero and saturating out-of-range values.
     pub fn to_u128(self) -> u128 {
         self.to_unsigned(u128::MAX)
     }
     #[inline]
+    /// Converts to `usize` by truncating toward zero and saturating out-of-range values.
     pub fn to_usize(self) -> usize {
         self.to_unsigned(usize::MAX as u128) as usize
     }
 }
 
-macro_rules! impl_from_signed {
-    ($($t:ty),* $(,)?) => {$ (
-        impl From<$t> for f80 {
-            #[inline]
-            fn from(value: $t) -> Self { Self::from_i128(value as i128) }
-        }
-    )*};
+impl From<i8> for f80 {
+    #[inline]
+    fn from(value: i8) -> Self {
+        Self::from_i128(value as i128)
+    }
 }
 
-macro_rules! impl_from_unsigned {
-    ($($t:ty),* $(,)?) => {$ (
-        impl From<$t> for f80 {
-            #[inline]
-            fn from(value: $t) -> Self { Self::from_u128(value as u128) }
-        }
-    )*};
+impl From<i16> for f80 {
+    #[inline]
+    fn from(value: i16) -> Self {
+        Self::from_i128(value as i128)
+    }
 }
 
-impl_from_signed!(i8, i16, i32, i64, i128, isize);
-impl_from_unsigned!(u8, u16, u32, u64, u128, usize);
+impl From<i32> for f80 {
+    #[inline]
+    fn from(value: i32) -> Self {
+        Self::from_i128(value as i128)
+    }
+}
+
+impl From<i64> for f80 {
+    #[inline]
+    fn from(value: i64) -> Self {
+        Self::from_i128(value as i128)
+    }
+}
+
+impl From<i128> for f80 {
+    #[inline]
+    fn from(value: i128) -> Self {
+        Self::from_i128(value as i128)
+    }
+}
+
+impl From<isize> for f80 {
+    #[inline]
+    fn from(value: isize) -> Self {
+        Self::from_i128(value as i128)
+    }
+}
+
+impl From<u8> for f80 {
+    #[inline]
+    fn from(value: u8) -> Self {
+        Self::from_u128(value as u128)
+    }
+}
+
+impl From<u16> for f80 {
+    #[inline]
+    fn from(value: u16) -> Self {
+        Self::from_u128(value as u128)
+    }
+}
+
+impl From<u32> for f80 {
+    #[inline]
+    fn from(value: u32) -> Self {
+        Self::from_u128(value as u128)
+    }
+}
+
+impl From<u64> for f80 {
+    #[inline]
+    fn from(value: u64) -> Self {
+        Self::from_u128(value as u128)
+    }
+}
+
+impl From<u128> for f80 {
+    #[inline]
+    fn from(value: u128) -> Self {
+        Self::from_u128(value as u128)
+    }
+}
+
+impl From<usize> for f80 {
+    #[inline]
+    fn from(value: usize) -> Self {
+        Self::from_u128(value as u128)
+    }
+}
 
 impl From<f32> for f80 {
     #[inline]
